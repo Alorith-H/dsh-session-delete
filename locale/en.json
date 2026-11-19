@@ -1,0 +1,6 @@
+{
+	"meta": {
+		"title": "Delete Session (dsh-session-delete)",
+		"description": "Adds a \"Delete session\" row to a conversation's \"...\" menu: after confirmation it removes that session's on-disk log directory, drops it from its workspace's session list, and clears its archive/pin bookkeeping. DSH itself only archives; this plugin adds deletion."
+	}
+}

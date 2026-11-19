@@ -1,0 +1,58 @@
+{
+	"name": "dsh-session-delete",
+	"version": "1.0.0",
+	"private": true,
+	"description": "给 DSH 的会话菜单补上「删除会话」：真正移除该会话的磁盘日志，并把它从所在工作区里摘掉。DSH 原生只提供归档，不提供删除。",
+	"keywords": [
+		"dsh",
+		"deepseek-harness",
+		"plugin",
+		"cordis",
+		"session"
+	],
+	"license": "MIT",
+	"author": "Alorith",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Alorith-H/dsh-session-delete.git"
+	},
+	"icon": "./icon.svg",
+	"type": "module",
+	"main": "index.js",
+	"exports": {
+		".": "./index.js",
+		"./client": "./client.js",
+		"./icon": "./icon.svg",
+		"./locale/*.json": "./locale/*.json",
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"index.js",
+		"client.js",
+		"icon.svg",
+		"locale",
+		"cordis.patch.yml",
+		"README.md",
+		"LICENSE"
+	],
+	"scripts": {
+		"test": "node test/run.mjs"
+	},
+	"engines": {
+		"node": ">=20"
+	},
+	"dsh": {
+		"bundle": {
+			"patch": "./cordis.patch.yml"
+		},
+		"client": {
+			"platform": "web",
+			"immediately": true,
+			"inject": [
+				"@deepseek-ai/dsh-client-locale",
+				"@deepseek-ai/dsh-client-ui-renderer",
+				"@deepseek-ai/dsh-client-ui-workspace"
+			]
+		}
+	}
+}
