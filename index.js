@@ -240,6 +240,95 @@ function turnInProgress(session) {
 }
 
 /**
+ * Take one session out of the in-memory store.
+ *
+ * The sidebar row is backed by the live store entry, not only by the log file:
+ * `session.list` reports a live session with no persisted log as a still-pending
+ * conversation, so deleting the bytes alone leaves a row that can never be
+ * removed again (the log is already gone, the entry is not). The store keeps
+ * one entry per live session and each entry owns the detach capability that
+ * removes it and emits the paired `session/disposed`; `sessions` exposes no
+ * public detach, so use that entry, then fall back to the store map.
+ *
+ * @returns whether a live entry was found and removed.
+ */
+function detachLiveSession(sessions, sessionId) {
+	let store
+	try {
+		store = sessions?.store
+	} catch {
+		store = undefined
+	}
+	if (!(store instanceof Map)) return false
+	const entry = store.get(sessionId)
+	if (entry === undefined) return false
+	try {
+		if (typeof entry.detach === 'function') {
+			entry.detach()
+			return true
+		}
+		if (typeof sessions.detachEntered === 'function') {
+			sessions.detachEntered(entry)
+			return true
+		}
+		store.delete(sessionId)
+		return true
+	} catch {
+		return false
+	}
+}
+
+/** Wait one macrotask so disposal-triggered writers settle before files disappear. */
+function settle() {
+	return new Promise((resolve) => setTimeout(resolve, 25))
+}
+
+/**
+ * The projection-cache document the Host writes for one session. The cache is
+ * a derived listing hint, but a stale document with no log left behind is one
+ * more durable artifact of a conversation that no longer exists.
+ */
+function projectionCacheRecord(persistence, root, sessionId) {
+	const candidates = []
+	try {
+		if (typeof persistence?.config?.root === 'string') {
+			candidates.push(join(persistence.config.root, '..', 'storages', 'session_projcache', 'sessions'))
+		}
+	} catch {
+		/* getter refused: try the derived layout */
+	}
+	const home = join(root, '..')
+	candidates.push(join(home, 'storages', 'session_projcache', 'sessions'))
+	if (typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0) {
+		candidates.push(join(process.env.DSH_HOME, 'storages', 'session_projcache', 'sessions'))
+	}
+	return candidates.map((directory) => join(resolve(directory), sessionId + '.json'))
+}
+
+/** Remove the session's cached listing document; a missing or locked one is not a failure. */
+async function removeProjectionCacheRecord(persistence, root, sessionId) {
+	const removed = []
+	for (const path of projectionCacheRecord(persistence, root, sessionId)) {
+		if (!(await isFile(path))) continue
+		try {
+			await rm(path, { force: true })
+			removed.push(path)
+		} catch {
+			/* derived data: a stale document is harmless, never a refused deletion */
+		}
+	}
+	return removed
+}
+
+async function isFile(path) {
+	try {
+		return (await stat(path)).isFile()
+	} catch {
+		return false
+	}
+}
+
+/**
  * Delete one conversation. This is the single implementation both the UI row
  * and any future agent tool would call.
  *
@@ -278,16 +367,32 @@ export async function deleteSession(ctx, sessionId) {
 		cwd = undefined
 	}
 
+	// 3. A live session must leave the store BEFORE its bytes go away: the
+	//    disposal path flushes the session, so flushing first (and letting the
+	//    detach settle) keeps a farewell write from recreating the log after we
+	//    deleted it. The row itself is that store entry — see detachLiveSession.
+	let detachedLive = false
+	if (liveSession !== undefined && liveSession !== null) {
+		try {
+			if (typeof sessions.flush === 'function') await sessions.flush(liveSession)
+		} catch {
+			/* a session whose log is already gone cannot flush; deletion still proceeds */
+		}
+		detachedLive = detachLiveSession(sessions, sessionId)
+		if (detachedLive) await settle()
+	}
+
 	const root = sessionRoot(persistence)
 	if (root === undefined) {
 		throw new DeleteError('session-root-unknown', '找不到会话存储目录，没有删除任何文件。', 500)
 	}
 
-	// 3. Remove the bytes first: if this is refused, the session stays intact
-	//    everywhere else instead of turning into a half-deleted row.
+	// 4. Remove the bytes. A session that is already gone on disk is not a
+	//    failure: the live entry was the last thing keeping the row visible.
 	const removed = await removeArtifacts(root, sessionId, cwd)
+	const removedCache = await removeProjectionCacheRecord(persistence, root, sessionId)
 
-	// 4. Unaccount it from its workspace.
+	// 5. Unaccount it from its workspace.
 	let detachedFrom
 	for (const workspace of listWorkspaces(registry)) {
 		const sessionIds = workspace?.sessionIds
@@ -306,7 +411,7 @@ export async function deleteSession(ctx, sessionId) {
 		break
 	}
 
-	// 5. Drop stale archive/pin ids. Both calls are idempotent no-ops for an id
+	// 6. Drop stale archive/pin ids. Both calls are idempotent no-ops for an id
 	//    that is not in the set, but only call them when the set has it.
 	const archived = Array.isArray(registry?.archivedSessionIds) ? registry.archivedSessionIds : []
 	if (archived.includes(sessionId) && typeof registry?.unarchiveSession === 'function') {
@@ -329,7 +434,9 @@ export async function deleteSession(ctx, sessionId) {
 		sessionId,
 		removed,
 		cwd,
-		detached: detachedFrom !== undefined
+		detached: detachedFrom !== undefined,
+		detachedLive,
+		removedCache
 	}
 }
 
@@ -398,5 +505,5 @@ export function apply(ctx) {
 		path: ROUTE_PATH,
 		handler: (request, response) => handleRequest(ctx, request, response)
 	}))
-	if (typeof ctx.logger?.info === 'function') ctx.logger.info('dsh-session-delete: mounted %s', ROUTE_PATH)
+	if (typeof ctx.logger?.info === 'function') ctx.logger.info('dsh-session-delete: mounted %s (1.1.0, live-session detach)', ROUTE_PATH)
 }

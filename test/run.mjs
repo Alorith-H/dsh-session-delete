@@ -23,7 +23,7 @@ const exists = async (path) => {
 }
 
 /** A fake ctx exposing the four Host services the deletion path reads. */
-function makeCtx({ root = ROOT, cwd, liveAgent = false, liveSession, archived = [], pinned = [] } = {}) {
+function makeCtx({ root = ROOT, cwd, liveAgent = false, liveSession, archived = [], pinned = [], store, flush, detachEntered } = {}) {
 	const workspace = {
 		sessionIds: [SESSION_ID],
 		async detachSession(id) {
@@ -46,10 +46,20 @@ function makeCtx({ root = ROOT, cwd, liveAgent = false, liveSession, archived = 
 		stat: async () => ({ header: cwd === undefined ? {} : { cwd } })
 	}
 	const agents = { get: () => (liveAgent ? { id: SESSION_ID } : undefined) }
-	const sessions = { get: () => liveSession }
+	const sessionStore = store ?? new Map()
+	const sessions = {
+		get: () => liveSession,
+		list: () => (liveSession === undefined ? [] : [liveSession]),
+		store: sessionStore,
+		flush: async () => {
+			if (typeof flush === 'function') flush()
+		}
+	}
+	if (typeof detachEntered === 'function') sessions.detachEntered = detachEntered
 	return {
 		workspace,
 		registry,
+		store: sessionStore,
 		ctx: {
 			get: (name) => ({ sessionPersistence: persistence, workspaceRegistry: registry, agents, sessions })[name]
 		}
@@ -177,6 +187,102 @@ async function prepare(cwd = CWD) {
 {
 	check('projectKey collapses separators', projectKey('C:\\a\\b') === projectKey('C:/a/b') && projectKey('C:\\a\\b').startsWith('--'))
 	check('projectKey keeps the 255-unit cap', projectKey('x'.repeat(400)).length <= 255)
+}
+
+// 8. a live session leaves the in-memory store BEFORE its bytes go away
+{
+	const dir = await prepare()
+	const order = []
+	const store = new Map()
+	store.set(SESSION_ID, {
+		id: SESSION_ID,
+		detach() {
+			order.push('detach')
+			store.delete(SESSION_ID)
+		}
+	})
+	const { ctx } = makeCtx({
+		cwd: CWD,
+		liveSession: liveWithEvents('turn/start', 'turn/end'),
+		store,
+		flush: () => order.push('flush')
+	})
+	const outcome = await deleteSession(ctx, SESSION_ID)
+	check('live session flushed before detach', order.join(',') === 'flush,detach', order.join(','))
+	check('live session gone from store', !store.has(SESSION_ID))
+	check('live session files removed', !(await exists(dir)))
+	check('detachedLive reported', outcome.detachedLive === true)
+}
+
+// 9. a live session whose log is already gone is still deletable (the row
+//    that could not be removed is backed by the store entry, not by the log)
+{
+	await rm(TMP, { recursive: true, force: true })
+	await mkdir(ROOT, { recursive: true })
+	const store = new Map()
+	store.set(SESSION_ID, {
+		id: SESSION_ID,
+		detach() {
+			store.delete(SESSION_ID)
+		}
+	})
+	const { ctx, workspace } = makeCtx({ cwd: CWD, liveSession: liveWithEvents('turn/end'), store })
+	const outcome = await deleteSession(ctx, SESSION_ID)
+	check('log-less live session succeeds', outcome.removed.length === 0, JSON.stringify(outcome.removed))
+	check('log-less live session leaves store', !store.has(SESSION_ID))
+	check('log-less live session reports detach', outcome.detachedLive === true)
+	check('log-less live session drops workspace row', workspace.sessionIds.length === 0)
+}
+
+// 10. the cached listing document is removed as well
+{
+	await prepare()
+	const cacheDir = join(TMP, 'storages', 'session_projcache', 'sessions')
+	await mkdir(cacheDir, { recursive: true })
+	const cacheFile = join(cacheDir, SESSION_ID + '.json')
+	await writeFile(cacheFile, JSON.stringify({ version: 7, record: {} }))
+	const { ctx } = makeCtx({ cwd: CWD })
+	const outcome = await deleteSession(ctx, SESSION_ID)
+	check('projection cache document removed', !(await exists(cacheFile)))
+	check('removedCache lists it', outcome.removedCache.length === 1, JSON.stringify(outcome.removedCache))
+}
+
+// 11. an entry without its own detach falls back to the store's detachEntered
+{
+	await rm(TMP, { recursive: true, force: true })
+	await mkdir(ROOT, { recursive: true })
+	const store = new Map()
+	store.set(SESSION_ID, { id: SESSION_ID })
+	const { ctx } = makeCtx({
+		cwd: CWD,
+		liveSession: liveWithEvents('turn/end'),
+		store,
+		detachEntered: (entry) => store.delete(entry.id)
+	})
+	const outcome = await deleteSession(ctx, SESSION_ID)
+	check('detachEntered fallback used', !store.has(SESSION_ID) && outcome.detachedLive === true)
+}
+
+// 12. a refused mid-turn delete keeps the live entry where it was
+{
+	const dir = await prepare()
+	const store = new Map()
+	store.set(SESSION_ID, {
+		id: SESSION_ID,
+		detach() {
+			store.delete(SESSION_ID)
+		}
+	})
+	const { ctx } = makeCtx({ cwd: CWD, liveSession: liveWithEvents('turn/start'), store })
+	let code = ''
+	try {
+		await deleteSession(ctx, SESSION_ID)
+	} catch (error) {
+		code = error instanceof DeleteError ? error.code : 'other'
+	}
+	check('mid-turn live session refused', code === 'session-running', code)
+	check('mid-turn live session stays in store', store.has(SESSION_ID))
+	check('mid-turn live session keeps files', await exists(dir))
 }
 
 await rm(TMP, { recursive: true, force: true })
