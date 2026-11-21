@@ -505,5 +505,5 @@ export function apply(ctx) {
 		path: ROUTE_PATH,
 		handler: (request, response) => handleRequest(ctx, request, response)
 	}))
-	if (typeof ctx.logger?.info === 'function') ctx.logger.info('dsh-session-delete: mounted %s (1.1.0, live-session detach)', ROUTE_PATH)
+	if (typeof ctx.logger?.info === 'function') ctx.logger.info('dsh-session-delete: mounted %s (1.1.1, live-session detach)', ROUTE_PATH)
 }

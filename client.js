@@ -34,8 +34,6 @@ window.__ModuleLoader__.load({
 			'menu.confirmDelete': '再次点击确认删除',
 			'menu.deleting': '正在删除…',
 			'hint.irreversible': '会话日志会从磁盘移除，无法恢复。',
-			'toast.deleted': '已删除会话：',
-			'toast.deletedNoTitle': '会话已删除。',
 			'error.session-running': '这个会话正在运行，请先停止当前回合再删除。',
 			'error.session-busy': '会话文件正被占用，请先切换到其他会话再试一次。',
 			'error.session-root-unknown': '找不到会话存储目录，没有删除任何文件。',
@@ -48,8 +46,6 @@ window.__ModuleLoader__.load({
 			'menu.confirmDelete': 'Click again to delete',
 			'menu.deleting': 'Deleting…',
 			'hint.irreversible': 'The session log is removed from disk; this cannot be undone.',
-			'toast.deleted': 'Session deleted: ',
-			'toast.deletedNoTitle': 'Session deleted.',
 			'error.session-running': 'This session is running. Stop the current turn before deleting it.',
 			'error.session-busy': 'The session files are in use. Switch to another session and try again.',
 			'error.session-root-unknown': 'Cannot locate the session storage directory; no files were removed.',
@@ -66,42 +62,8 @@ window.__ModuleLoader__.load({
 			'.dsh-session-delete-row:focus-visible{outline:1px solid rgba(229,72,77,.65);outline-offset:-1px;}',
 			'.dsh-session-delete-row[disabled]{opacity:.55;cursor:default;}',
 			'.dsh-session-delete-row[data-phase="confirm"]{background:rgba(229,72,77,.16);font-weight:600;}',
-			'.dsh-session-delete-hint{padding:0 10px 4px;font-size:11px;line-height:16px;color:#e5484d;opacity:.85;}',
-			'.dsh-session-delete-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147483000;',
-			'max-width:min(560px,calc(100vw - 48px));padding:9px 14px;border-radius:10px;font:inherit;font-size:13px;',
-			'line-height:20px;box-shadow:0 8px 28px rgba(0,0,0,.28);word-break:break-word;}',
-			'.dsh-session-delete-toast[data-kind="ok"]{background:#1f7a48;color:#f2fff7;}',
-			'.dsh-session-delete-toast[data-kind="error"]{background:#b3282d;color:#fff4f4;}',
-			'.dsh-session-delete-toast[hidden]{display:none;}'
+			'.dsh-session-delete-hint{padding:0 10px 4px;font-size:11px;line-height:16px;color:#e5484d;opacity:.85;}'
 		].join('');
-
-		/**
-		 * Window-level feedback. The session menu unmounts as soon as the pointer
-		 * leaves it (and a successful delete closes it), so an error rendered only
-		 * inside the row can vanish before it is read — which is exactly how this
-		 * feature first looked like "the click does nothing". A body-level toast
-		 * outlives the menu, and needed no react-dom in this bundle.
-		 */
-		let toastTimer = null;
-		function showToast(kind, text) {
-			if (typeof document === 'undefined' || !document.body) return;
-			let host = document.getElementById('dsh-session-delete-toast');
-			if (!host) {
-				host = document.createElement('div');
-				host.id = 'dsh-session-delete-toast';
-				host.className = 'dsh-session-delete-toast';
-				host.setAttribute('role', kind === 'error' ? 'alert' : 'status');
-				document.body.appendChild(host);
-			}
-			host.textContent = text;
-			host.dataset.kind = kind;
-			host.hidden = false;
-			if (toastTimer !== null) clearTimeout(toastTimer);
-			toastTimer = setTimeout(() => {
-				host.hidden = true;
-				toastTimer = null;
-			}, kind === 'ok' ? 3200 : 9000);
-		}
 
 		/** Resolve a route against the page's own base URI, like the shipped plugins do. */
 		function apiPath(path) {
@@ -180,16 +142,12 @@ window.__ModuleLoader__.load({
 					.then(() => {
 						// The workspace follow stream drops the row; closing the menu keeps
 						// the pointer's focus in the sidebar.
-						const title = typeof props.displayTitle === 'string' ? props.displayTitle.trim() : '';
-						showToast('ok', title.length > 0 ? translate('toast.deleted') + title : translate('toast.deletedNoTitle'));
 						if (typeof setMenuOpen === 'function') setMenuOpen(false);
 						refreshAfterDelete();
 					})
 					.catch((error) => {
-						const text = message(error);
-						setFailure(text);
+						setFailure(message(error));
 						setPhase('error');
-						showToast('error', text);
 					});
 			};
 
